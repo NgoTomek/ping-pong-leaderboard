@@ -15,6 +15,7 @@ USERS = {
     'player2': {'password': 'pass2'},
     'player3': {'password': 'pass3'},
     'player4': {'password': 'pass4'},
+    'bartoszwysocki': {'password': 'haslohaslo'},
 }
 
 # ELO calculation function
