@@ -11,11 +11,11 @@ if 'logged_in' not in st.session_state:
 
 # Hardcoded users (username: password)
 USERS = {
-    'player1': {'password': 'pass1'},
-    'player2': {'password': 'pass2'},
-    'player3': {'password': 'pass3'},
-    'player4': {'password': 'pass4'},
+    'yankes': {'password': 'malyrobal123'},
+    'janzastawa': {'password': 'janekzastawa'},
+    'stasboguslawski': {'password': 'stan123'},
     'bartoszwysocki': {'password': 'haslohaslo'},
+    'ngotomek': {'password': 'haslohaslo'},
 }
 
 # ELO calculation function
