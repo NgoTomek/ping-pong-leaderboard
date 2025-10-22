@@ -20,6 +20,8 @@ USERS = {
     'davidg': {'password': '123456'},
     'piotreksujecki': {'password': 'nie'},
     'tomaszrymaszewski': {'password': 'tomciu123'},
+    'wiktorchmielewski': {'password': 'spartagym'},
+    
 }
 
 # ELO calculation function
