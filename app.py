@@ -21,6 +21,19 @@ USERS = {
     'piotreksujecki': {'password': 'nie'},
     'tomaszrymaszewski': {'password': 'tomciu123'},
     'wiktorchmielewski': {'password': 'spartagym'},
+    'alexbatty': {'password': 'batty123'},
+    'piotreksujecki': {'password': 'psuja'},
+    'michalzajezierski': {'password': 'zajez123'},
+    'mikadobrzynski': {'password': 'mika123'},
+    'konradstudniarek': {'password': 'kondziks'},
+    'igorzuzalek': {'password': 'zuz123'},
+    'aleksandersosnowski': {'password': 'sosna123'},
+    'krzysztofbaginski': {'password': 'bagieta123'},
+    'lukebakicpawlak': {'password': 'bakic123'},
+    'maxwilewski': {'password': 'shitatfifa'},
+    'enejjancic': {'password': 'jan123'},
+    'olob': {'password': 'olo123'},
+    'aleksstokowski': {'password': 'stok123'},
     
 }
 
