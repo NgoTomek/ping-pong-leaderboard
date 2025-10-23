@@ -15,7 +15,7 @@ USERS = {
     'janzastawa': {'password': 'janekzastawa'},
     'stasboguslawski': {'password': 'stan123'},
     'bartoszwysocki': {'password': 'haslohaslo'},
-    'ngotomek': {'password': 'haslohaslo'},
+    'ngotomek': {'password': 'apexlegends'},
     'danielladny': {'password': '12345'},
     'davidg': {'password': '123456'},
     'piotreksujecki': {'password': 'nie'},
