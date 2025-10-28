@@ -3,6 +3,11 @@ import json
 from datetime import datetime
 import math
 from collections import defaultdict
+import os
+import tempfile
+import shutil
+import fcntl
+from contextlib import contextmanager
 
 # Initialize session state
 if 'logged_in' not in st.session_state:
@@ -18,11 +23,11 @@ USERS = {
     'ngotomek': {'password': 'apexlegends'},
     'danielladny': {'password': '12345'},
     'davidg': {'password': '123456'},
-    'piotreksujecki': {'password': 'nie'},
+    'piotreksujecki1': {'password': 'nie'},  # FIXED: Renamed to avoid duplicate
     'tomaszrymaszewski': {'password': 'tomciu123'},
     'wiktorchmielewski': {'password': 'spartagym'},
     'alexbatty': {'password': 'batty123'},
-    'piotreksujecki': {'password': 'psuja'},
+    'piotreksujecki2': {'password': 'psuja'},  # FIXED: Renamed to avoid duplicate
     'michalzajezierski': {'password': 'zajez123'},
     'mikadobrzynski': {'password': 'mika123'},
     'konradstudniarek': {'password': 'kondziks'},
@@ -34,8 +39,127 @@ USERS = {
     'enejjancic': {'password': 'jan123'},
     'olob': {'password': 'olo123'},
     'aleksstokowski': {'password': 'stok123'},
-    
 }
+
+# File paths
+DATA_DIR = 'ping_pong_data'
+USER_DATA_FILE = os.path.join(DATA_DIR, 'user_data.json')
+PENDING_MATCHES_FILE = os.path.join(DATA_DIR, 'pending_matches.json')
+MATCH_HISTORY_FILE = os.path.join(DATA_DIR, 'match_history.json')
+LOCK_FILE = os.path.join(DATA_DIR, '.lock')
+
+# Ensure data directory exists
+os.makedirs(DATA_DIR, exist_ok=True)
+
+@contextmanager
+def file_lock(lock_file_path, timeout=10):
+    """Context manager for file locking to prevent race conditions"""
+    lock_file = None
+    try:
+        lock_file = open(lock_file_path, 'w')
+        # Try to acquire lock with timeout
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        yield
+    except (IOError, OSError) as e:
+        if lock_file:
+            lock_file.close()
+        raise Exception("Could not acquire file lock - another operation in progress") from e
+    finally:
+        if lock_file:
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                lock_file.close()
+            except:
+                pass
+
+def atomic_write(file_path, data):
+    """Write JSON data atomically to prevent corruption"""
+    try:
+        # Create backup if file exists
+        if os.path.exists(file_path):
+            backup_path = file_path + '.backup'
+            shutil.copy2(file_path, backup_path)
+        
+        # Write to temporary file first
+        temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(file_path), text=True)
+        try:
+            with os.fdopen(temp_fd, 'w') as f:
+                json.dump(data, f, indent=2)
+            # Atomic rename (on POSIX systems)
+            shutil.move(temp_path, file_path)
+            return True
+        except Exception as e:
+            # Clean up temp file if it exists
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+            raise e
+    except Exception as e:
+        st.error(f"Error writing to {file_path}: {str(e)}")
+        # Try to restore from backup
+        backup_path = file_path + '.backup'
+        if os.path.exists(backup_path):
+            try:
+                shutil.copy2(backup_path, file_path)
+                st.warning("Restored from backup")
+            except:
+                pass
+        return False
+
+def validate_user_data(data):
+    """Validate user data structure"""
+    if not isinstance(data, dict):
+        return False
+    
+    required_fields = ['elo', 'matches', 'wins', 'losses', 'point_diff', 
+                      'points_scored', 'points_conceded', 'current_streak', 
+                      'best_streak', 'worst_streak']
+    
+    for username, user_info in data.items():
+        if not isinstance(user_info, dict):
+            return False
+        for field in required_fields:
+            if field not in user_info:
+                return False
+            if not isinstance(user_info[field], (int, float)):
+                return False
+    
+    return True
+
+def validate_match(match):
+    """Validate match data structure"""
+    required_fields = ['id', 'winner', 'loser', 'winner_score', 'loser_score', 
+                      'submitter', 'confirmer', 'timestamp']
+    
+    if not isinstance(match, dict):
+        return False
+    
+    for field in required_fields:
+        if field not in match:
+            return False
+    
+    # Validate scores
+    if not isinstance(match['winner_score'], (int, float)) or \
+       not isinstance(match['loser_score'], (int, float)):
+        return False
+    
+    if match['winner_score'] <= match['loser_score']:
+        return False
+    
+    if match['winner_score'] < 0 or match['loser_score'] < 0:
+        return False
+    
+    # Reasonable score limit (0-50 should cover all realistic scenarios)
+    if match['winner_score'] > 50 or match['loser_score'] > 50:
+        return False
+    
+    # Validate players exist
+    if match['winner'] not in USERS or match['loser'] not in USERS:
+        return False
+    
+    if match['winner'] == match['loser']:
+        return False
+    
+    return True
 
 # ELO calculation function
 def calculate_elo(winner_elo, loser_elo, k=32):
@@ -64,7 +188,7 @@ def init_user_data():
             'point_diff': 0,
             'points_scored': 0,
             'points_conceded': 0,
-            'current_streak': 0,  # Positive for wins, negative for losses
+            'current_streak': 0,
             'best_streak': 0,
             'worst_streak': 0
         }
@@ -114,45 +238,99 @@ def get_head_to_head(match_history, player1, player2):
         'total_matches': p1_wins + p2_wins
     }
 
-# Load data from storage
+# Load data from storage with proper error handling
 def load_data():
     """Load user data, pending matches, and match history from JSON files"""
     try:
-        with open('user_data.json', 'r') as f:
-            user_data = json.load(f)
-    except FileNotFoundError:
-        user_data = init_user_data()
-        save_user_data(user_data)
+        with file_lock(LOCK_FILE):
+            # Load user data
+            try:
+                if os.path.exists(USER_DATA_FILE):
+                    with open(USER_DATA_FILE, 'r') as f:
+                        user_data = json.load(f)
+                    
+                    # Validate loaded data
+                    if not validate_user_data(user_data):
+                        st.warning("User data corrupted, reinitializing...")
+                        user_data = init_user_data()
+                        atomic_write(USER_DATA_FILE, user_data)
+                    
+                    # Add any new users from USERS dict
+                    for username in USERS.keys():
+                        if username not in user_data:
+                            user_data[username] = {
+                                'elo': 1500,
+                                'matches': 0,
+                                'wins': 0,
+                                'losses': 0,
+                                'point_diff': 0,
+                                'points_scored': 0,
+                                'points_conceded': 0,
+                                'current_streak': 0,
+                                'best_streak': 0,
+                                'worst_streak': 0
+                            }
+                else:
+                    user_data = init_user_data()
+                    atomic_write(USER_DATA_FILE, user_data)
+            except (json.JSONDecodeError, IOError) as e:
+                st.error(f"Error loading user data: {str(e)}")
+                user_data = init_user_data()
+                atomic_write(USER_DATA_FILE, user_data)
+            
+            # Load pending matches
+            try:
+                if os.path.exists(PENDING_MATCHES_FILE):
+                    with open(PENDING_MATCHES_FILE, 'r') as f:
+                        pending_matches = json.load(f)
+                    # Validate each match
+                    pending_matches = [m for m in pending_matches if validate_match(m)]
+                else:
+                    pending_matches = []
+            except (json.JSONDecodeError, IOError) as e:
+                st.error(f"Error loading pending matches: {str(e)}")
+                pending_matches = []
+            
+            # Load match history
+            try:
+                if os.path.exists(MATCH_HISTORY_FILE):
+                    with open(MATCH_HISTORY_FILE, 'r') as f:
+                        match_history = json.load(f)
+                    # Basic validation
+                    if not isinstance(match_history, list):
+                        match_history = []
+                else:
+                    match_history = []
+            except (json.JSONDecodeError, IOError) as e:
+                st.error(f"Error loading match history: {str(e)}")
+                match_history = []
+            
+            return user_data, pending_matches, match_history
     
-    try:
-        with open('pending_matches.json', 'r') as f:
-            pending_matches = json.load(f)
-    except FileNotFoundError:
-        pending_matches = []
-    
-    try:
-        with open('match_history.json', 'r') as f:
-            match_history = json.load(f)
-    except FileNotFoundError:
-        match_history = []
-    
-    return user_data, pending_matches, match_history
+    except Exception as e:
+        st.error(f"Critical error loading data: {str(e)}")
+        return init_user_data(), [], []
 
-# Save data to storage
+# Save data to storage with proper locking and error handling
 def save_data(user_data, pending_matches, match_history):
-    """Save all data to JSON files"""
-    save_user_data(user_data)
-    
-    with open('pending_matches.json', 'w') as f:
-        json.dump(pending_matches, f, indent=2)
-    
-    with open('match_history.json', 'w') as f:
-        json.dump(match_history, f, indent=2)
-
-def save_user_data(user_data):
-    """Save user data to JSON file"""
-    with open('user_data.json', 'w') as f:
-        json.dump(user_data, f, indent=2)
+    """Save all data to JSON files with atomic writes and locking"""
+    try:
+        with file_lock(LOCK_FILE):
+            success = True
+            
+            # Validate before saving
+            if not validate_user_data(user_data):
+                st.error("Invalid user data, not saving")
+                return False
+            
+            success &= atomic_write(USER_DATA_FILE, user_data)
+            success &= atomic_write(PENDING_MATCHES_FILE, pending_matches)
+            success &= atomic_write(MATCH_HISTORY_FILE, match_history)
+            
+            return success
+    except Exception as e:
+        st.error(f"Error saving data: {str(e)}")
+        return False
 
 def update_streak(user_data, username, won):
     """Update win/loss streak for a player"""
@@ -212,16 +390,20 @@ def submit_match_page(user_data, pending_matches, match_history):
                 if st.button("✅ Confirm", key=f"confirm_{match['id']}", use_container_width=True):
                     process_confirmed_match(match, user_data, match_history)
                     pending_matches.remove(match)
-                    save_data(user_data, pending_matches, match_history)
-                    st.success("✅ Match confirmed!")
-                    st.rerun()
+                    if save_data(user_data, pending_matches, match_history):
+                        st.success("✅ Match confirmed!")
+                        st.rerun()
+                    else:
+                        st.error("Error saving data, please try again")
             
             with col2:
                 if st.button("❌ Reject", key=f"reject_{match['id']}", use_container_width=True):
                     pending_matches.remove(match)
-                    save_data(user_data, pending_matches, match_history)
-                    st.info("Match rejected")
-                    st.rerun()
+                    if save_data(user_data, pending_matches, match_history):
+                        st.info("Match rejected")
+                        st.rerun()
+                    else:
+                        st.error("Error saving data, please try again")
             
             st.divider()
     
@@ -233,13 +415,16 @@ def submit_match_page(user_data, pending_matches, match_history):
     
     col1, col2 = st.columns(2)
     with col1:
-        your_score = st.number_input("Your Score", min_value=0, value=11, step=1)
+        your_score = st.number_input("Your Score", min_value=0, max_value=50, value=11, step=1)
     with col2:
-        opponent_score = st.number_input("Opponent Score", min_value=0, value=9, step=1)
+        opponent_score = st.number_input("Opponent Score", min_value=0, max_value=50, value=9, step=1)
     
     if st.button("Submit Match", use_container_width=True, type="primary"):
+        # Validation
         if your_score == opponent_score:
             st.error("❌ Scores cannot be tied")
+        elif your_score == 0 and opponent_score == 0:
+            st.error("❌ Both scores cannot be zero")
         else:
             winner = st.session_state.username if your_score > opponent_score else opponent
             loser = opponent if your_score > opponent_score else st.session_state.username
@@ -250,22 +435,33 @@ def submit_match_page(user_data, pending_matches, match_history):
                 'id': datetime.now().isoformat(),
                 'winner': winner,
                 'loser': loser,
-                'winner_score': winner_score,
-                'loser_score': loser_score,
+                'winner_score': int(winner_score),
+                'loser_score': int(loser_score),
                 'submitter': st.session_state.username,
                 'confirmer': opponent,
                 'timestamp': datetime.now().isoformat()
             }
             
-            pending_matches.append(match)
-            save_data(user_data, pending_matches, match_history)
-            st.success(f"✅ Match submitted! Waiting for {opponent} to confirm.")
-            st.rerun()
+            # Validate match before adding
+            if validate_match(match):
+                pending_matches.append(match)
+                if save_data(user_data, pending_matches, match_history):
+                    st.success(f"✅ Match submitted! Waiting for {opponent} to confirm.")
+                    st.rerun()
+                else:
+                    st.error("Error saving match, please try again")
+            else:
+                st.error("Invalid match data, please check your inputs")
 
 def process_confirmed_match(match, user_data, match_history):
     """Process a confirmed match and update ELO ratings"""
     winner = match['winner']
     loser = match['loser']
+    
+    # Validate players exist in user_data
+    if winner not in user_data or loser not in user_data:
+        st.error("Error: One or both players not found in database")
+        return
     
     # Calculate new ELOs with changes
     new_winner_elo, new_loser_elo, winner_change, loser_change = calculate_elo(
@@ -351,6 +547,10 @@ def player_stats_page(user_data, match_history):
         "Select Player", 
         list(USERS.keys())
     )
+    
+    if selected_player not in user_data:
+        st.error("Player data not found")
+        return
     
     data = user_data[selected_player]
     stats = calculate_stats(user_data, selected_player)
@@ -440,7 +640,17 @@ def match_history_page(match_history):
             
             st.write(f"**{match['winner']}** defeated **{match['loser']}**")
             st.write(f"Score: {match['winner_score']} - {match['loser_score']} | ELO: :green[{match['winner']} +{winner_elo_change}] :red[{match['loser']} {loser_elo_change}]")
-            st.write(f"Date: {match['timestamp'][:10]}")
+            
+            # FIXED: Added safe timestamp handling
+            timestamp = match.get('timestamp', 'Unknown date')
+            if timestamp and timestamp != 'Unknown date':
+                try:
+                    st.write(f"Date: {timestamp[:10]}")
+                except:
+                    st.write(f"Date: {timestamp}")
+            else:
+                st.write("Date: Unknown")
+            
             st.divider()
 
 # Main app
